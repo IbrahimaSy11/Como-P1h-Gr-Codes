@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         COMO P-1-H Scannable ID QR Codes
 // @namespace    https://github.com/uny2-ops
-// @version      1.6.0
+// @version      1.6.8
 // @description  P-1-H Scannable ID QR workspace displayed inside the current dashboard tab
 // @author       Ibrahim
 // @homepageURL  https://github.com/IbrahimaSy11/como-p1h-qr-codes
@@ -981,18 +981,18 @@ var generationTimer = null;
 var overlayStyle = document.createElement('style');
 overlayStyle.textContent =
   '#p1hqr-overlay{position:fixed!important;inset:0!important;z-index:2147483646!important;' +
-  'display:none;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;' +
+  'display:none;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;overflow:auto;' +
   'background:rgba(8,15,30,.55)}' +
   '#p1hqr-overlay.open{display:flex!important}' +
   '#p1hqr-modal{position:relative;display:flex;overflow:hidden;box-sizing:border-box;' +
-  'width:min(440px,calc(100vw - 28px),calc((100dvh - 28px) * 1.25));aspect-ratio:1.25 / 1;' +
-  'height:auto;max-height:calc(100dvh - 28px);border:1px solid #d9e0e9;border-radius:12px;background:white;' +
-  'box-shadow:0 22px 80px rgba(0,0,0,.4)}' +
+  'width:540px;min-width:540px;max-width:none;' +
+  'height:450px;min-height:450px;max-height:none;flex:0 0 auto;border:1px solid #d9e0e9;border-radius:14px;background:white;' +
+  'box-shadow:0 22px 80px rgba(0,0,0,.4);transform:scale(var(--p1h-zoom,1));transform-origin:center center;will-change:transform}' +
   '#p1hqr-modal-head{position:absolute;right:9px;top:7px;z-index:2}' +
   '#p1hqr-modal-head>span{display:none}' +
   '#p1hqr-frame{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 auto;border:0;background:white}' +
-  '#p1hqr-overlay-close{width:clamp(18px,5vw,24px);height:clamp(18px,5vw,24px);padding:0;border:1px solid #dbe2ec;border-radius:6px;' +
-  'background:#f8fafc;color:#344054;font:700 15px sans-serif;cursor:pointer}' +
+  '#p1hqr-overlay-close{width:24px;height:24px;padding:0;border:1px solid #dbe2ec;border-radius:6px;' +
+  'background:#f8fafc;color:#344054;font:700 18px sans-serif;cursor:pointer}' +
   '#p1hqr-overlay-close:focus-visible{outline:3px solid #2563eb;outline-offset:2px}';
 document.head.appendChild(overlayStyle);
 
@@ -1024,6 +1024,29 @@ overlay.appendChild(modal);
 document.body.appendChild(overlay);
 var previousBodyOverflow = '';
 var previousFocus = null;
+
+/* Correct for browser zoom instead of mistaking a zoomed-out viewport
+   for a larger physical window. Zoom-out increases innerWidth in CSS pixels
+   while outerWidth remains roughly the physical window width. The popup
+   gets larger in CSS pixels to counteract the browser's downscaling.
+   A small inverse-window adjustment retains the requested resize behavior. */
+function updateInversePopupSize() {
+  var vw = window.innerWidth || document.documentElement.clientWidth || 1440;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 900;
+  var outer = window.outerWidth || vw;
+  var zoomCompensation = Math.pow(Math.max(0.25, Math.min(8, vw / Math.max(outer, 1))), 1.12);
+  var windowCompensation = Math.pow(1440 / Math.max(outer, 1), 0.18);
+  var desired = Math.max(0.7, Math.min(8, zoomCompensation * windowCompensation));
+  /* Keep the whole transformed dialog on-screen, even at high zoom. */
+  var fit = Math.max(0.1, Math.min((vw - 24) / 540, (vh - 24) / 450));
+  var scale = Math.max(0.1, Math.min(desired, fit));
+  modal.style.setProperty('--p1h-zoom', String(scale));
+}
+window.addEventListener('resize', updateInversePopupSize, { passive: true });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', updateInversePopupSize, { passive: true });
+}
+updateInversePopupSize();
 
 function closeWorkspace() {
   if (!overlay.classList.contains('open')) return;
@@ -1079,18 +1102,18 @@ function showWorkspace(html) {
       '.viewer{position:fixed!important;inset:0!important;padding:0!important;background:white!important;backdrop-filter:none!important}' +
       '.viewer.open{display:flex!important}' +
       '.viewer-box{width:100%!important;height:100%!important;max-height:none!important;box-shadow:none!important;' +
-      'border-radius:0!important;padding:12% 13% 4%!important;overflow:hidden!important;justify-content:space-between!important;gap:1%!important}' +
+      'border-radius:0!important;padding:9% 11% 4%!important;overflow:hidden!important;justify-content:space-between!important;gap:1%!important;box-sizing:border-box!important}' +
       '.viewer-qr-wrap{padding:0!important;width:100%!important;flex:1 1 auto!important;min-height:0!important;display:flex!important;align-items:center!important;justify-content:center!important}' +
       '.viewer-qr{display:block!important;width:100%!important;max-width:100%!important;max-height:100%!important;aspect-ratio:1!important;object-fit:contain!important}' +
       '.viewer-sid{display:block!important;flex:0 0 auto!important;width:100%!important;margin:0 auto!important;' +
       'padding:2.5% 1%!important;border:1px solid #dbe2ea!important;border-radius:6px!important;background:#fcfdff!important;' +
-      'text-align:center!important;font-size:clamp(8px,2.8vw,11px)!important;font-weight:700!important;color:#344054!important;overflow-wrap:anywhere!important;user-select:text!important}' +
+      'text-align:center!important;font-size:23px!important;line-height:1.15!important;font-weight:700!important;color:#344054!important;overflow-wrap:anywhere!important;user-select:text!important}' +
       '.viewer-head{display:block!important;position:absolute!important;top:0!important;left:0!important;transform:none!important;' +
       'width:100%!important;height:10%!important;display:flex!important;align-items:center!important;justify-content:center!important;' +
-      'background:#f8fafc!important;border-bottom:1px solid #e1e6ee!important;font-size:clamp(9px,2.7vw,12px)!important;font-weight:900!important;color:#1f2937!important;' +
+      'background:#f8fafc!important;border-bottom:1px solid #e1e6ee!important;font-size:26px!important;font-weight:900!important;color:#1f2937!important;' +
       'white-space:nowrap!important;letter-spacing:.025em!important}' +
       '.viewer-nav{top:50%!important;transform:translateY(-50%)!important;z-index:5!important;width:9%!important;height:15%!important;' +
-      'border-radius:8px!important;border:0!important;background:#f1f5f9!important;color:#334155!important;font-size:clamp(18px,6vw,28px)!important}' +
+      'border-radius:8px!important;border:0!important;background:#f1f5f9!important;color:#334155!important;font-size:35px!important}' +
       '.viewer-prev{left:2%!important}.viewer-next{right:2%!important}' +
       '.viewer-nav:hover:not(:disabled){background:#e7edf5!important;color:#111827!important}' +
       '.viewer-nav:disabled{opacity:.3!important;cursor:not-allowed!important}' +
@@ -1164,6 +1187,7 @@ function startGeneration() {
     previousBodyOverflow = document.body.style.overflow;
     previousFocus = document.activeElement;
   }
+  updateInversePopupSize();
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
   document.body.style.overflow = 'hidden';
