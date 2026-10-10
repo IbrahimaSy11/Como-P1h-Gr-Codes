@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         COMO P-1-H Scannable ID QR Codes
 // @namespace    https://github.com/uny2-ops
-// @version      1.4.9
-// @description  P-1-H Scannable ID QR workspace with a fixed-size Manager Actions button that disables when no QR data exists
+// @version      1.6.0
+// @description  P-1-H Scannable ID QR workspace displayed inside the current dashboard tab
 // @author       Ibrahim
 // @homepageURL  https://github.com/IbrahimaSy11/como-p1h-qr-codes
 // @supportURL   https://github.com/IbrahimaSy11/como-p1h-qr-codes/issues
@@ -646,8 +646,8 @@ function buildTabHTML(items) {
   'function outToast(msg){var t=document.getElementById("out-toast");t.textContent=msg;t.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove("show");},1800);}' +
 
 
-  'function show(i){if(!visibleCards.length)return;current=(i+visibleCards.length)%visibleCards.length;var card=visibleCards[current];var img=card.querySelector(".qr-img");qr.src=img.src;qr.alt=img.alt;loc.textContent=card.querySelector(".loc").textContent;sid.textContent=card.querySelector(".sid").textContent;head.textContent="SCAN "+(current+1)+" / "+visibleCards.length;}' +
-  'function openAt(i,origin){if(!visibleCards.length){outToast("No QR codes available");return;}lastFocus=origin||document.activeElement;show(i);viewer.classList.add("open");viewer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";document.getElementById("viewer-close").focus();}' +
+  'function show(i){if(!visibleCards.length)return;current=Math.max(0,Math.min(i,visibleCards.length-1));var card=visibleCards[current];var img=card.querySelector(".qr-img");qr.src=img.src;qr.alt=img.alt;loc.textContent=card.querySelector(".loc").textContent;sid.textContent=card.querySelector(".sid").textContent;head.textContent="QR "+(current+1)+" OF "+visibleCards.length+" TO PRINT";document.getElementById("viewer-prev").disabled=current===0;document.getElementById("viewer-next").disabled=current===visibleCards.length-1;}' +
+  'function openAt(i,origin){if(!visibleCards.length){outToast("No QR codes available");return;}lastFocus=origin||document.activeElement;show(i);viewer.classList.add("open");viewer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";box.setAttribute("tabindex","-1");box.focus();}' +
   'function closeViewer(){viewer.classList.remove("open");viewer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)try{lastFocus.focus();}catch(e){}}' +
   'function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){outToast("Scannable ID copied");},fallback);}else fallback();function fallback(){try{var ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();document.execCommand("copy");ta.remove();outToast("Scannable ID copied");}catch(e){outToast("Copy failed");}}}' +
   'allCards.forEach(function(card){card.querySelector(".qr-open").addEventListener("click",function(){openAt(visibleCards.indexOf(card),this);});});' +
@@ -974,53 +974,162 @@ window.addEventListener('resize', function () {
 var MAX_RETRIES = 5, RETRY_MS = 500;
 var generationSession = 0;
 var generationTimer = null;
-var pendingWindow = null;
 
-function generationStillCurrent(sessionId) {
-  return sessionId === generationSession;
+/* Reuse one in-page overlay instead of opening an additional browser tab.
+   An iframe isolates the existing QR workspace styles and keyboard handlers
+   from the Amazon dashboard and preserves all QR scan functionality. */
+var overlayStyle = document.createElement('style');
+overlayStyle.textContent =
+  '#p1hqr-overlay{position:fixed!important;inset:0!important;z-index:2147483646!important;' +
+  'display:none;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;' +
+  'background:rgba(8,15,30,.55)}' +
+  '#p1hqr-overlay.open{display:flex!important}' +
+  '#p1hqr-modal{position:relative;display:flex;overflow:hidden;box-sizing:border-box;' +
+  'width:min(440px,calc(100vw - 28px),calc((100dvh - 28px) * 1.25));aspect-ratio:1.25 / 1;' +
+  'height:auto;max-height:calc(100dvh - 28px);border:1px solid #d9e0e9;border-radius:12px;background:white;' +
+  'box-shadow:0 22px 80px rgba(0,0,0,.4)}' +
+  '#p1hqr-modal-head{position:absolute;right:9px;top:7px;z-index:2}' +
+  '#p1hqr-modal-head>span{display:none}' +
+  '#p1hqr-frame{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 auto;border:0;background:white}' +
+  '#p1hqr-overlay-close{width:clamp(18px,5vw,24px);height:clamp(18px,5vw,24px);padding:0;border:1px solid #dbe2ec;border-radius:6px;' +
+  'background:#f8fafc;color:#344054;font:700 15px sans-serif;cursor:pointer}' +
+  '#p1hqr-overlay-close:focus-visible{outline:3px solid #2563eb;outline-offset:2px}';
+document.head.appendChild(overlayStyle);
+
+var overlay = document.createElement('section');
+overlay.id = 'p1hqr-overlay';
+overlay.setAttribute('role', 'dialog');
+overlay.setAttribute('aria-modal', 'true');
+overlay.setAttribute('aria-label', 'P-1-H QR scanning popup');
+overlay.setAttribute('aria-hidden', 'true');
+var modal = document.createElement('div');
+modal.id = 'p1hqr-modal';
+var modalHead = document.createElement('div');
+modalHead.id = 'p1hqr-modal-head';
+var modalTitle = document.createElement('span');
+modalTitle.textContent = 'P-1-H QR Codes';
+var workspaceFrame = document.createElement('iframe');
+workspaceFrame.id = 'p1hqr-frame';
+workspaceFrame.title = 'P-1-H QR codes';
+var overlayClose = document.createElement('button');
+overlayClose.id = 'p1hqr-overlay-close';
+overlayClose.type = 'button';
+overlayClose.textContent = '×';
+overlayClose.setAttribute('aria-label', 'Close QR scanner');
+modalHead.appendChild(modalTitle);
+modalHead.appendChild(overlayClose);
+modal.appendChild(modalHead);
+modal.appendChild(workspaceFrame);
+overlay.appendChild(modal);
+document.body.appendChild(overlay);
+var previousBodyOverflow = '';
+var previousFocus = null;
+
+function closeWorkspace() {
+  if (!overlay.classList.contains('open')) return;
+  generationSession++;
+  clearTimeout(generationTimer);
+  generationTimer = null;
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  workspaceFrame.removeAttribute('srcdoc');
+  document.body.style.overflow = previousBodyOverflow;
+  resetBtn();
+  if (previousFocus && previousFocus.isConnected && previousFocus.focus) previousFocus.focus();
 }
 
-function closePendingWindow() {
-  if (!pendingWindow) return;
-  try { if (!pendingWindow.closed) pendingWindow.close(); } catch (e) {}
-  pendingWindow = null;
+overlayClose.addEventListener('click', closeWorkspace);
+overlay.addEventListener('click', function (event) {
+  if (event.target === overlay) closeWorkspace();
+});
+document.addEventListener('keydown', function (event) {
+  if (!overlay.classList.contains('open')) return;
+  if (event.key === 'Escape') { event.preventDefault(); closeWorkspace(); return; }
+  // The outer close button initially owns focus. Send arrow navigation to the
+  // iframe regardless of which document currently holds keyboard focus.
+  var buttonId = event.key === 'ArrowLeft' ? 'viewer-prev' :
+                 event.key === 'ArrowRight' ? 'viewer-next' : null;
+  if (buttonId) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      var frameDoc = workspaceFrame.contentDocument;
+      var arrow = frameDoc && frameDoc.getElementById(buttonId);
+      if (arrow && !arrow.disabled) arrow.click();
+    } catch (e) { /* Frame not yet ready. */ }
+  }
+}, true);
+workspaceFrame.addEventListener('load', function () {
+  // Keep arrow keys inside the scanner rather than focused on the X button.
+  try {
+    if (overlay.classList.contains('open') &&
+        workspaceFrame.contentDocument.getElementById('qr-viewer')) {
+      workspaceFrame.focus();
+    }
+  } catch (e) { /* Non-critical focus fallback. */ }
+});
+
+function showWorkspace(html) {
+  // Render only the scan-mode QR with left/right navigation. The original
+  // grid still supplies cards to the existing navigator but is not displayed.
+  if (html.indexOf('data-p1hqr-workspace="1"') !== -1) {
+    var scanOnlyCSS = '<style>' +
+      '.shell,.viewer-help,.viewer-close,.viewer-loc,.viewer-actions{display:none!important}' +
+      'html,body{height:100%!important;min-height:0!important;margin:0!important;background:#fff!important;overflow:hidden!important}' +
+      '.viewer{position:fixed!important;inset:0!important;padding:0!important;background:white!important;backdrop-filter:none!important}' +
+      '.viewer.open{display:flex!important}' +
+      '.viewer-box{width:100%!important;height:100%!important;max-height:none!important;box-shadow:none!important;' +
+      'border-radius:0!important;padding:12% 13% 4%!important;overflow:hidden!important;justify-content:space-between!important;gap:1%!important}' +
+      '.viewer-qr-wrap{padding:0!important;width:100%!important;flex:1 1 auto!important;min-height:0!important;display:flex!important;align-items:center!important;justify-content:center!important}' +
+      '.viewer-qr{display:block!important;width:100%!important;max-width:100%!important;max-height:100%!important;aspect-ratio:1!important;object-fit:contain!important}' +
+      '.viewer-sid{display:block!important;flex:0 0 auto!important;width:100%!important;margin:0 auto!important;' +
+      'padding:2.5% 1%!important;border:1px solid #dbe2ea!important;border-radius:6px!important;background:#fcfdff!important;' +
+      'text-align:center!important;font-size:clamp(8px,2.8vw,11px)!important;font-weight:700!important;color:#344054!important;overflow-wrap:anywhere!important;user-select:text!important}' +
+      '.viewer-head{display:block!important;position:absolute!important;top:0!important;left:0!important;transform:none!important;' +
+      'width:100%!important;height:10%!important;display:flex!important;align-items:center!important;justify-content:center!important;' +
+      'background:#f8fafc!important;border-bottom:1px solid #e1e6ee!important;font-size:clamp(9px,2.7vw,12px)!important;font-weight:900!important;color:#1f2937!important;' +
+      'white-space:nowrap!important;letter-spacing:.025em!important}' +
+      '.viewer-nav{top:50%!important;transform:translateY(-50%)!important;z-index:5!important;width:9%!important;height:15%!important;' +
+      'border-radius:8px!important;border:0!important;background:#f1f5f9!important;color:#334155!important;font-size:clamp(18px,6vw,28px)!important}' +
+      '.viewer-prev{left:2%!important}.viewer-next{right:2%!important}' +
+      '.viewer-nav:hover:not(:disabled){background:#e7edf5!important;color:#111827!important}' +
+      '.viewer-nav:disabled{opacity:.3!important;cursor:not-allowed!important}' +
+      '</style>';
+    html = html.replace('</head>', scanOnlyCSS + '</head>');
+  }
+  workspaceFrame.srcdoc = html;
+}
+
+function generationStillCurrent(sessionId) {
+  return sessionId === generationSession && overlay.classList.contains('open');
 }
 
 function resetBtn() {
   setBusy(false);
 }
 
-function finishGeneration(sessionId, success) {
+function finishGeneration(sessionId) {
   if (!generationStillCurrent(sessionId)) return;
   clearTimeout(generationTimer);
   generationTimer = null;
-  if (success) pendingWindow = null;
   resetBtn();
   scheduleCountRefresh(0);
 }
 
 function failGeneration(sessionId, message) {
   if (!generationStillCurrent(sessionId)) return;
-  closePendingWindow();
+  closeWorkspace();
   toast(message, true);
-  finishGeneration(sessionId, false);
 }
 
-function doGenerate(attempt, sessionId, win) {
+function doGenerate(attempt, sessionId) {
   if (!generationStillCurrent(sessionId)) return;
-  if (!win || win.closed) {
-    pendingWindow = null;
-    toast('QR window was closed before generation finished.', true);
-    finishGeneration(sessionId, false);
-    return;
-  }
-
   var res = scrapeRows();
   if (!generationStillCurrent(sessionId)) return;
 
   if ((res.error || !res.items.length) && attempt < MAX_RETRIES) {
     generationTimer = setTimeout(function () {
-      if (generationStillCurrent(sessionId)) doGenerate(attempt + 1, sessionId, win);
+      if (generationStillCurrent(sessionId)) doGenerate(attempt + 1, sessionId);
     }, RETRY_MS);
     return;
   }
@@ -1029,23 +1138,21 @@ function doGenerate(attempt, sessionId, win) {
     failGeneration(sessionId, 'Could not find the item table on this cart. Open the cart details fully, then try again.');
     return;
   }
-
   if (!res.items.length) {
     failGeneration(sessionId,
       'No ' + TARGET_PREFIX + ' rows found (scanned ' + res.total + ' row' + (res.total === 1 ? '' : 's') + ').');
     return;
   }
 
-  var ok = false;
-  try { ok = openQRTab(res.items, win); } catch (e) { ok = false; }
-
-  if (!ok) {
-    failGeneration(sessionId, 'The QR tab opened, but its content could not be written. Try again or disable extensions that block new-tab scripts.');
+  try {
+    showWorkspace(buildTabHTML(res.items));
+  } catch (e) {
+    failGeneration(sessionId, 'Unable to generate QR workspace: ' + e.message);
     return;
   }
 
   toast(res.items.length + ' QR code' + (res.items.length === 1 ? '' : 's') + ' ready.', false);
-  finishGeneration(sessionId, true);
+  finishGeneration(sessionId);
 }
 
 function startGeneration() {
@@ -1053,21 +1160,17 @@ function startGeneration() {
   var sessionId = generationSession;
   clearTimeout(generationTimer);
   generationTimer = null;
-  closePendingWindow();
-
-  /* Open immediately inside the click gesture. This is the reliable way to
-     avoid popup blockers even when the Angular table needs a retry. */
-  var win = window.open('', '_blank');
-  if (!win) {
-    toast('Popup blocked — allow popups for this site, then click the QR button again.', true);
-    resetBtn();
-    return;
+  if (!overlay.classList.contains('open')) {
+    previousBodyOverflow = document.body.style.overflow;
+    previousFocus = document.activeElement;
   }
-
-  pendingWindow = win;
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  overlayClose.focus();
   setBusy(true);
-  writeToTab(win, buildLoadingHTML());
-  doGenerate(0, sessionId, win);
+  showWorkspace(buildLoadingHTML());
+  doGenerate(0, sessionId);
 }
 
 btn.addEventListener('click', function () {
@@ -1147,7 +1250,7 @@ function onNavigate() {
   generationSession++;
   clearTimeout(generationTimer);
   generationTimer = null;
-  closePendingWindow();
+  closeWorkspace();
   setBusy(false);
   updateLauncherCount(0);
   tblAt = 0;
@@ -1275,6 +1378,6 @@ if (findCompleteTaskButton()) {
   scheduleCountRefresh(0);
 }
 
-console.log('[P1H-QR] v1.4.9 loaded — plain number count; stable no-flicker mount; matches Complete Task color/size; QR value = Scannable ID');
+console.log('[P1H-QR] v1.5.1 loaded — plain number count; stable no-flicker mount; matches Complete Task color/size; QR value = Scannable ID');
 
 })();
