@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         COMO P-1-H Scannable ID QR Codes
 // @namespace    https://github.com/uny2-ops
-// @version      1.6.8
+// @version      1.7.3
 // @description  P-1-H Scannable ID QR workspace displayed inside the current dashboard tab
 // @author       Ibrahim
 // @homepageURL  https://github.com/IbrahimaSy11/como-p1h-qr-codes
@@ -419,7 +419,9 @@ function isVisibleElement(el) {
 
 /* Locate the best table plus the two column indices we need.
    If Angular leaves an old hidden table behind, prefer the visible one. */
+var cachedTableInfo = null;
 function findTable() {
+  if (cachedTableInfo && cachedTableInfo.table.isConnected && isVisibleElement(cachedTableInfo.table)) return cachedTableInfo;
   var tables = document.querySelectorAll('table');
   var fallback = null;
 
@@ -444,10 +446,11 @@ function findTable() {
     if (locIdx === -1 || idIdx === -1) continue;
 
     var match = { table: table, locIdx: locIdx, idIdx: idIdx, headerCount: heads.length };
-    if (isVisibleElement(table)) return match;
+    if (isVisibleElement(table)) { cachedTableInfo = match; return match; }
     if (!fallback) fallback = match;
   }
 
+  cachedTableInfo = fallback;
   return fallback;
 }
 
@@ -739,6 +742,7 @@ style.textContent =
     'transform:none!important;transition:none!important;vertical-align:middle!important;' +
     'white-space:nowrap!important;overflow:hidden!important;visibility:hidden!important}' +
   '#p1hqr-btn.visible{display:inline-flex!important;visibility:visible!important}' +
+  '#p1hqr-btn,#p1hqr-btn *{animation:none!important;transition:none!important}' +
   '#p1hqr-btn:not(:disabled):hover,#p1hqr-btn:not(:disabled):focus{filter:none!important;transform:none!important}' +
   '#p1hqr-btn:not(:disabled):active{filter:none!important;transform:none!important}' +
   '#p1hqr-btn:focus-visible{outline:2px solid currentColor;outline-offset:2px}' +
@@ -785,6 +789,7 @@ var mainLabelEl = btn.querySelector('.p1h-main');
 var subLabelEl = btn.querySelector('.p1h-sub');
 
 var launcherCount = 0;
+var launcherCountRendered = -1;
 var launcherBusy = false;
 
 function syncLauncherDisabledState() {
@@ -815,6 +820,8 @@ function updateLauncherCount(count) {
   count = Math.max(0, Number(count) || 0);
   launcherCount = count;
 
+  if (launcherCountRendered === count) { syncLauncherDisabledState(); return; }
+  launcherCountRendered = count;
   countEl.textContent = String(count);
   countEl.setAttribute('aria-label', count + ' QR code' + (count === 1 ? '' : 's'));
   countEl.classList.toggle('zero', count === 0);
@@ -864,6 +871,7 @@ function findCompleteTaskButton() {
 }
 
 var lastLauncherSizeKey = '';
+var lastLauncherSource = null;
 var lastLauncherThemeKey = '';
 
 function syncLauncherSizeToComplete(complete) {
@@ -878,8 +886,9 @@ function syncLauncherSizeToComplete(complete) {
   var w = Math.max(1, Math.round(rect.width));
   var h = Math.max(1, Math.round(rect.height));
   var key = w + 'x' + h;
-  if (key === lastLauncherSizeKey) return;
+  if (key === lastLauncherSizeKey && lastLauncherSource === complete) return;
   lastLauncherSizeKey = key;
+  lastLauncherSource = complete;
 
   btn.style.setProperty('width', w + 'px', 'important');
   btn.style.setProperty('min-width', w + 'px', 'important');
@@ -949,15 +958,14 @@ function mountLauncherInline() {
 
   /* Inline placement must never inherit any stale position coordinates from
      older script versions. */
-  btn.style.position = 'static';
-  btn.style.left = '';
-  btn.style.top = '';
-  btn.style.right = '';
-  btn.style.bottom = '';
-  btn.style.transform = '';
+  // Static positioning is already guaranteed by CSS. Rewriting the same
+  // inline styles on each Angular update can trigger visible button twitching.
 
-  syncLauncherSizeToComplete(complete);
-  syncLauncherAppearanceToComplete(complete);
+  if (lastLauncherSource !== complete) {
+    lastLauncherThemeKey = '';
+    syncLauncherSizeToComplete(complete);
+    syncLauncherAppearanceToComplete(complete);
+  }
   return true;
 }
 
@@ -967,6 +975,7 @@ function restoreLauncherPosition() {
 }
 
 window.addEventListener('resize', function () {
+  lastLauncherSource = null;
   if (btnVisible) mountLauncherInline();
 });
 
@@ -1036,7 +1045,7 @@ function updateInversePopupSize() {
   var outer = window.outerWidth || vw;
   var zoomCompensation = Math.pow(Math.max(0.25, Math.min(8, vw / Math.max(outer, 1))), 1.12);
   var windowCompensation = Math.pow(1440 / Math.max(outer, 1), 0.18);
-  var desired = Math.max(0.7, Math.min(8, zoomCompensation * windowCompensation));
+  var desired = Math.max(0.55, Math.min(6.5, zoomCompensation * windowCompensation * 0.68));
   /* Keep the whole transformed dialog on-screen, even at high zoom. */
   var fit = Math.max(0.1, Math.min((vw - 24) / 540, (vh - 24) / 450));
   var scale = Math.max(0.1, Math.min(desired, fit));
@@ -1174,7 +1183,6 @@ function doGenerate(attempt, sessionId) {
     return;
   }
 
-  toast(res.items.length + ' QR code' + (res.items.length === 1 ? '' : 's') + ' ready.', false);
   finishGeneration(sessionId);
 }
 
@@ -1217,12 +1225,11 @@ function setVisible(v) {
 
   var changed = v !== btnVisible;
   btnVisible = v;
-  btn.classList.toggle('visible', v);
+  if (changed) btn.classList.toggle('visible', v);
 
   if (v) {
     /* Re-assert exact placement even when visibility itself did not change,
        because Angular can rebuild the Manager Actions group in-place. */
-    mountLauncherInline();
     if (changed) scheduleCountRefresh(0);
   }
 }
@@ -1265,12 +1272,15 @@ function scheduleCountRefresh(delay) {
   countRefreshTimer = setTimeout(function () {
     countRefreshTimer = null;
     if (!btnVisible || document.hidden || isGeneratedWorkspace()) return;
+    countLastScanAt = Date.now();
     var res = scrapeRows();
     updateLauncherCount(res.error ? 0 : res.items.length);
   }, delay === undefined ? 220 : delay);
 }
 
 function onNavigate() {
+  if (location.href === lastHref) return;
+  lastHref = location.href;
   generationSession++;
   clearTimeout(generationTimer);
   generationTimer = null;
@@ -1315,11 +1325,8 @@ document.addEventListener('visibilitychange', function () {
    navigation immediately; this catches unusual route changes without a 120ms loop. */
 var lastHref = location.href;
 setInterval(function () {
-  if (location.href !== lastHref) {
-    lastHref = location.href;
-    onNavigate();
-  }
-}, 700);
+  if (!document.hidden && location.href !== lastHref) onNavigate();
+}, 3000);
 
 /* One observer. Keep launcher movement targeted to Manager Actions changes.
    Ordinary table/count mutations no longer cause repeated remount/resize work,
@@ -1327,68 +1334,68 @@ setInterval(function () {
 var domRefreshTimer = null;
 
 function mutationMayAffectLauncher(m) {
-  if (!m) return false;
-
-  var t = m.target;
-  try {
-    if (t === btn || (btn.contains && btn.contains(t))) return false;
-  } catch(e) {}
-
-  try {
-    if (t && t.nodeType === 1 &&
-        (t.matches && (t.matches('.btn-group,.job-details') ||
-                       t.matches('button[ng-click*="showCompleteJobDialog"],button[data-ng-click*="showCompleteJobDialog"]')))) {
-      return true;
-    }
-    if (t && t.nodeType === 1 && t.closest && t.closest('.btn-group')) return true;
-  } catch(e2) {}
-
-  var lists = [m.addedNodes || [], m.removedNodes || []];
-  for (var li = 0; li < lists.length; li++) {
-    for (var i = 0; i < lists[li].length; i++) {
-      var n = lists[li][i];
-      if (!n || n.nodeType !== 1) continue;
-      try {
-        if ((n.matches && (n.matches('.btn-group') ||
-                           n.matches('button[ng-click*="showCompleteJobDialog"],button[data-ng-click*="showCompleteJobDialog"]'))) ||
-            (n.querySelector && n.querySelector(
-              '.btn-group,button[ng-click*="showCompleteJobDialog"],button[data-ng-click*="showCompleteJobDialog"]'
-            ))) return true;
-      } catch(e3) {}
-    }
+  var target = m.target;
+  if (!target || target.nodeType !== 1) return false;
+  if (target === btn || btn.contains(target)) return false;
+  if (target.matches('.btn-group') || target.closest('.btn-group')) return true;
+  // Only newly attached structural nodes could introduce a new button group.
+  for (var i = 0; i < m.addedNodes.length; i++) {
+    var n = m.addedNodes[i];
+    if (n.nodeType !== 1) continue;
+    if (n.matches('.btn-group, .job-details, button[ng-click*="showCompleteJobDialog"]')) return true;
+    // Skip deep searches for routine leaf updates.
+    if (n.matches('div, section, main') && n.querySelector('.btn-group button[ng-click*="showCompleteJobDialog"]')) return true;
   }
   return false;
 }
 
-new MutationObserver(function (mutations) {
-  var launcherStructureChanged = !btn.isConnected;
+var launcherRefreshPending = false;
+function scheduleLauncherRefresh() {
+  if (launcherRefreshPending) return;
+  launcherRefreshPending = true;
+  requestAnimationFrame(function () {
+    launcherRefreshPending = false;
+    if (document.hidden) return;
+    var complete = findCompleteTaskButton();
+    if (complete) setVisible(true);
+    else if (btnVisible) setVisible(false);
+  });
+}
 
-  if (!launcherStructureChanged) {
-    for (var i = 0; i < mutations.length; i++) {
-      if (mutationMayAffectLauncher(mutations[i])) {
-        launcherStructureChanged = true;
-        break;
+var countLastScanAt = 0;
+function scheduleTableScan() {
+  if (!btnVisible || document.hidden) return;
+  var now = Date.now();
+  // Never perform more than one table scrape per 600 ms on live DOM churn.
+  var delay = Math.max(260, 600 - (now - countLastScanAt));
+  scheduleCountRefresh(delay);
+}
+
+new MutationObserver(function (mutations) {
+  var structural = !btn.isConnected;
+  var tableChanged = false;
+  var currentTable = cachedTableInfo && cachedTableInfo.table;
+  for (var i = 0; i < mutations.length; i++) {
+    var m = mutations[i], t = m.target;
+    if (t === btn || btn.contains(t) || t === toastEl || toastEl.contains(t) ||
+        t === overlay || overlay.contains(t)) continue;
+    if (!structural && mutationMayAffectLauncher(m)) structural = true;
+    if (!tableChanged) {
+      // Relevant table updates only; no global subtree query for ordinary mutations.
+      if (currentTable && (t === currentTable || currentTable.contains(t))) tableChanged = true;
+      else if (t && t.nodeType === 1 && t.closest && t.closest('table')) tableChanged = true;
+      else {
+        for (var j = 0; j < m.addedNodes.length; j++) {
+          var n = m.addedNodes[j];
+          if (n.nodeType === 1 && (n.matches('table, tbody, tr') ||
+              (n.matches('div, section, main') && n.querySelector('table')))) { tableChanged = true; break; }
+        }
       }
     }
+    if (structural && tableChanged) break;
   }
-
-  if (launcherStructureChanged && !isGeneratedWorkspace()) {
-    var completeNow = findCompleteTaskButton();
-    if (completeNow) {
-      setVisible(true);
-      scheduleCountRefresh(0);
-    } else if (btnVisible) {
-      setVisible(false);
-    }
-  }
-
-  /* Slow/coalesced path for table/count/route state. */
-  if (domRefreshTimer) return;
-  domRefreshTimer = setTimeout(function () {
-    domRefreshTimer = null;
-    updateVisibility();
-    scheduleCountRefresh(0);
-  }, 240);
+  if (structural) scheduleLauncherRefresh();
+  if (tableChanged) scheduleTableScan();
 }).observe(document.body, { childList: true, subtree: true });
 
 /* Initial fast mount. On an already-rendered details page this puts the
@@ -1402,6 +1409,6 @@ if (findCompleteTaskButton()) {
   scheduleCountRefresh(0);
 }
 
-console.log('[P1H-QR] v1.5.1 loaded — plain number count; stable no-flicker mount; matches Complete Task color/size; QR value = Scannable ID');
+console.log('[P1H-QR] v1.7.3 loaded — plain number count; stable no-flicker mount; matches Complete Task color/size; QR value = Scannable ID');
 
 })();
